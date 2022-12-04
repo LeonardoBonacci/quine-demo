@@ -1,0 +1,112 @@
+version: 1
+
+title: Ingesting CSV Files
+
+contributor: https://github.com/LeonardoBonacci
+
+# Brief copy about this Recipe
+summary: |-
+  This recipe...
+
+# Longer form copy about this Recipe
+description: |-
+  This recipe is ...
+
+# Ingest Streams connect to data sources and establish how data is processed and transformed
+ingestStreams:
+  # INGEST-HIERARCHY
+  - type: FileIngest
+    path: $hierarchy_file
+    format:
+      type: CypherCsv
+      headers: true
+      query: |-
+        WITH $that AS row
+        MATCH (hi) 
+        WHERE id(hi) = idFrom("Hi", row.hid)
+        SET
+          hi:Hi,
+          hi.name = row.title,
+          hi.hid = row.hid
+        WITH hi, row.parent as parentId
+        MATCH (par) 
+        WHERE id(par) = idFrom("Hi", parentId)
+        SET par.hid = parentId, par:Hi
+        MERGE (hi:Hi)-[:CHILD]->(par:Hi)
+
+  # INGEST-PRODUCTS
+  - type: FileIngest
+    path: $product_file
+    format:
+      type: CypherCsv
+      headers: true
+      query: |-
+        WITH $that AS row
+        MATCH (pr) 
+        WHERE id(pr) = idFrom("Pr", row.pid)
+        SET
+          pr:Pr,
+          pr.name = row.title,
+          pr.pid = row.pid
+        WITH pr, row.parent as parentId
+        MATCH (par:Hi) 
+        WHERE id(par) = idFrom("Hi", parentId)
+        SET par.hid = parentId, par:Hi
+        MERGE (pr:Pr)-[:CAT]->(par:Hi)
+        MERGE (pr:Pr)-[:IS]->(:Combined)
+
+# Standing Queries define how data is transformed and output.
+standingQueries:
+  - pattern:
+      type: Cypher
+      mode: MultipleValues
+      # TODO 'Variable length relationships are not yet supported'
+      query: |-
+        MATCH (leaf:Pr)-[:CAT]->(child:Hi)-[:CHILD]->(mom:Hi)-[:CHILD]->(nanny:Hi)
+        WHERE child.name IS NOT NULL
+          AND mom.name IS NOT NULL
+          AND nanny.name IS NOT NULL
+        RETURN id(leaf) AS leafId, leaf.name AS leafName, 
+               child.name AS childName, mom.name AS momName, nanny.name AS nannyName
+    # TODO '(in standing queries, node variables can only reference constant properties or IDs)'           
+    outputs:
+      output-merge:
+        type: CypherQuery
+        query: |-
+          MATCH (pr:Pr)-[:IS]->(com:Combined)
+          WHERE strId(pr) = $that.data.leafId
+          SET 
+            com.leaf = $that.data.leafName,
+            com.child = $that.data.childName,
+            com.mom = $that.data.momName,
+            com.nanny = $that.data.nannyName
+          MERGE (pr)-[:IS]->(com)
+  - pattern:
+      type: Cypher
+      query: |-
+        MATCH (n:Combined)
+        RETURN DISTINCT id(n) AS id
+    outputs:
+      output-sout:
+        type: CypherQuery
+        query: |-
+          MATCH (n)
+          WHERE id(n) = $that.data.id
+          RETURN properties(n)
+        andThen:
+          type: PrintToStandardOut
+
+# Customize node appearance in web UI.
+nodeAppearances: []
+
+# Add queries to node context menus in web UI
+quickQueries: []
+
+# Customize sample queries listed in web UI
+sampleQueries:
+  - name: Sample of Nodes
+    query: match(n) return n limit 10
+  - name: Count Nodes
+    query: MATCH (n) RETURN distinct labels(n), count(*)
+  - name: Count Relationships
+    query: MATCH (n)-[r]->() RETURN type(r), count(*)
